@@ -16,45 +16,75 @@
 #define MLX_VDD  11
 #define MLX_SDA  41
 #define MLX_SCL  42
+#define TOUCH_SDA 7
+#define TOUCH_SCL 6
+#define TOUCH_RST 5
+
+
 #define SCREEN_ROTATION 1
 #define BAT_ADC  10
 #define SCREEN_BL_PIN 9
 
 #define _SCALE 9
-#define LONG_PUSH_T 1000
+#define BTN_LONG_PUSH_T 1000
+#define TOUCH_LONG_PUSH_T 500
+#define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds */
+#define TIME_TO_SLEEP  5        /* Time ESP32 will go to sleep (in seconds) */
 const int buttonPin1 = 0;  
 const int buttonPin2 = 21; 
+
+
 bool buttonState1 = 1;  
-bool buttonState2 = 0;  
+bool buttonState2 = 1;  
 
 const byte MLX90640_address = 0x33;
 static float mlx90640To[768];
+float mlx90640To_buffer[768];
 paramsMLX90640 mlx90640;
 
 
-uint16_t test_points[10][2];
+uint16_t test_points[5][2];
 int R_colour, G_colour, B_colour;            
-int i, j;                                    
+// int i, j;                                    
 float T_max, T_min, T_avg;                            
 float T_center;  
 int max_x, max_y, min_x, min_y;
 
 float bat_v;
 
-unsigned long previousMillis = 0; 
-const long interval = 1000;
-bool  lock = false;
+bool lock = false;
+bool touch_updated = false;
+
 bool power_on = true;
+bool freeze = false;  // 暂停画面
 
 TFT_eSPI tft = TFT_eSPI();  
-CST816T touch(7, 6, 5, -1);	// sda, scl, rst, irq
+CST816T touch(TOUCH_SDA, TOUCH_SCL, TOUCH_RST, -1);	// sda, scl, rst, irq
 
-
+int diffx, diffy;
 
 // ===============================
 // ===== determine the colour ====
 // ===============================
-uint8_t hashmap[182][3];
+
+// const char* str_wake[50];
+// // 打印唤醒原因
+// void print_wakeup_reason(){
+//   esp_sleep_wakeup_cause_t wakeup_reason;
+
+//   wakeup_reason = esp_sleep_get_wakeup_cause();
+
+//   switch(wakeup_reason)
+//   {
+//     case ESP_SLEEP_WAKEUP_EXT0 : strcpy("Wakeup caused by external signal using RTC_IO", str_wake); break;
+//     case ESP_SLEEP_WAKEUP_EXT1 : strcpy("Wakeup caused by external signal using RTC_CNTL", str_wake); break;
+//     case ESP_SLEEP_WAKEUP_TIMER : strcpy("Wakeup caused by timer", str_wake); break;
+//     case ESP_SLEEP_WAKEUP_TOUCHPAD : strcpy("Wakeup caused by touchpad", str_wake); break;
+//     case ESP_SLEEP_WAKEUP_ULP : strcpy("Wakeup caused by ULP program", str_wake); break;
+
+//     default : sprintf(str_wake, "Wakeup was not caused by deep sleep: %d\n",wakeup_reason); break;
+//   }
+// }
 
 
 void getColour(int j)
@@ -129,7 +159,7 @@ void task_mlx(void * ptr){
    if (isConnected() == false){
       while (1){
          Serial.println("MLX90640 not detected at default I2C address. Please check wiring. Freezing.");
-         delay(1000);
+         vTaskDelay(1000);
          };
    }Serial.println("MLX90640 online!");
    int status;
@@ -160,67 +190,83 @@ void task_mlx(void * ptr){
 
    // MLX主循环
    for(;power_on==true;){
-      lock = true;
-      for (byte x = 0 ; x < 2 ; x++){
-         uint16_t mlx90640Frame[834];
-         int status = MLX90640_GetFrameData(MLX90640_address, mlx90640Frame);
-      
-         if (status < 0){
-            Serial.print("GetFrame Error: ");
-            Serial.println(status);
-            }
-         float vdd = MLX90640_GetVdd(mlx90640Frame, &mlx90640);
-         float Ta = MLX90640_GetTa(mlx90640Frame, &mlx90640);
+      if (!freeze){ // 如果画面被暂停会跳过这个热成像图的刷新
+         lock = true;
+         for (byte x = 0 ; x < 2 ; x++){
+            uint16_t mlx90640Frame[834];
+            int status = MLX90640_GetFrameData(MLX90640_address, mlx90640Frame);
+         
+            if (status < 0){
+               Serial.print("GetFrame Error: ");
+               Serial.println(status);
+               }
+            float vdd = MLX90640_GetVdd(mlx90640Frame, &mlx90640);
+            float Ta = MLX90640_GetTa(mlx90640Frame, &mlx90640);
 
-         float tr = Ta - TA_SHIFT; //Reflected temperature based on the sensor ambient temperature
-         float emissivity = 0.95;
+            float tr = Ta - TA_SHIFT; //Reflected temperature based on the sensor ambient temperature
+            float emissivity = 0.95;
 
-         MLX90640_CalculateTo(mlx90640Frame, &mlx90640, emissivity, tr, mlx90640To);
-      }
-         // determine T_min and T_max and eliminate error pixels
-         // ====================================================
-
-      // mlx90640To[1*32 + 21] = 0.5 * (mlx90640To[1*32 + 20] + mlx90640To[1*32 + 22]);    // eliminate the error-pixels
-      // mlx90640To[4*32 + 30] = 0.5 * (mlx90640To[4*32 + 29] + mlx90640To[4*32 + 31]);    // eliminate the error-pixels
-      
-      lock = false;
-      T_min = mlx90640To[0];
-      T_max = mlx90640To[0];
-      T_avg = mlx90640To[0];
-      for (i = 1; i < 768; i++){
-         if((mlx90640To[i] > -41) && (mlx90640To[i] < 301))
-            {
-               if(mlx90640To[i] < T_min)
-                  {
-                  T_min = mlx90640To[i];
-                  }
-
-               if(mlx90640To[i] > T_max)
-                  {
-                  T_max = mlx90640To[i];
-                  max_x = i / 32;
-                  max_y = i % 32;
-                  }
-            }
-         else if(i > 0)   // temperature out of range
-            {
-               mlx90640To[i] = mlx90640To[i-1];
-            }
-         else
-            {
-               mlx90640To[i] = mlx90640To[i+1];
-            }
-            T_avg = T_avg + mlx90640To[i];
+            MLX90640_CalculateTo(mlx90640Frame, &mlx90640, emissivity, tr, mlx90640To);
          }
-      T_avg = T_avg / 768;
-      vTaskDelay(20);
+            // determine T_min and T_max and eliminate error pixels
+            // ====================================================
+
+         // mlx90640To[1*32 + 21] = 0.5 * (mlx90640To[1*32 + 20] + mlx90640To[1*32 + 22]);    // eliminate the error-pixels
+         // mlx90640To[4*32 + 30] = 0.5 * (mlx90640To[4*32 + 29] + mlx90640To[4*32 + 31]);    // eliminate the error-pixels
+         
+         lock = false;
+
+         T_min = mlx90640To[0];
+         T_max = mlx90640To[0];
+         T_avg = mlx90640To[0];
+         for (int i = 1; i < 768; i++){
+            if((mlx90640To[i] > -41) && (mlx90640To[i] < 301))
+               {
+                  if(mlx90640To[i] < T_min)
+                     {
+                     T_min = mlx90640To[i];
+                     }
+
+                  if(mlx90640To[i] > T_max)
+                     {
+                     T_max = mlx90640To[i];
+                     max_x = i / 32;
+                     max_y = i % 32;
+                     }
+               }
+            else if(i > 0)   // temperature out of range
+               {
+                  mlx90640To[i] = mlx90640To[i-1];
+               }
+            else
+               {
+                  mlx90640To[i] = mlx90640To[i+1];
+               }
+               T_avg = T_avg + mlx90640To[i];
+            }
+         T_avg = T_avg / 768;
+         }
+      vTaskDelay(5);
    }
    vTaskDelete(NULL); 
 }
 
 // 关机
 void power_off(){
-   esp_sleep_enable_ext0_wakeup(GPIO_NUM_33,1);
+   // pinMode(GPIO_NUM_33, INPUT_PULLUP);
+   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+   esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
+   // rtc_gpio_isolate(MLX_VDD);
+   // rtc_gpio_isolate(SCREEN_BL_PIN);
+   // rtc_gpio_isolate(MLX_SDA);
+   // rtc_gpio_isolate(MLX_SCL);
+   // rtc_gpio_isolate(TOUCH_SDA);
+   // rtc_gpio_isolate(TOUCH_SCL);
+   // rtc_gpio_isolate(TOUCH_RST);
+   
+   // esp_deep_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
+   // esp_deep_sleep_start();
+
    for(int i=512; i>0; i--){
       ledcWrite(0, i);
       vTaskDelay(2);
@@ -231,6 +277,7 @@ void power_off(){
    ledcWrite(0, 0);
    digitalWrite(SCREEN_BL_PIN, LOW);
    vTaskDelay(1000);
+   esp_light_sleep_start();
    // esp_deep_sleep_start();
    vTaskDelete(NULL); 
 }
@@ -260,9 +307,12 @@ void task_smooth_on(void * ptr){
 // 电池管理多任务
 void task_bat(void * ptr){
    pinMode(BAT_ADC, INPUT);
+   float r1 = 300.;
+   float r2 = 680.;
+   float coef = (r1+r2) / r2;
    for(;power_on==true;){
       int adc_value = analogRead(BAT_ADC);
-      bat_v = (float)adc_value / 4096 * 3.3 * 1.05;
+      bat_v = (float)adc_value / 4096 * 3.3 * coef;
       vTaskDelay(1000);
    }
    vTaskDelete(NULL);
@@ -270,20 +320,24 @@ void task_bat(void * ptr){
 
 void task_button(void * ptr){
    pinMode(buttonPin1, INPUT_PULLUP);
-   pinMode(buttonPin2, INPUT);
-   unsigned long start_time =  0;
+   pinMode(buttonPin2, INPUT_PULLUP);
+   unsigned long btn1_pushed_start_time =  0;
+   bool btn2_pushed = false;
    for(;power_on==true;){
-      if (digitalRead(buttonPin1) == LOW){
-         // if(buttonState1 == HIGH){
-         //    // 检测下降沿
-         //    vTaskDelay(5);
-         //    if (digitalRead(buttonPin1) == LOW){start_time = millis();}
-         // }
-         if (millis() - start_time >= LONG_PUSH_T){
+      if (digitalRead(buttonPin1) == LOW){  // 长按btn1的关机功能
+         if (millis() - btn1_pushed_start_time >= BTN_LONG_PUSH_T){
             power_off();
          }
       }else{
-         start_time = millis();
+         btn1_pushed_start_time = millis();
+      }
+
+      if (digitalRead(buttonPin2) == LOW){
+         vTaskDelay(5);
+         if (digitalRead(buttonPin2) == LOW){btn2_pushed=true;}
+      }else{
+         if (btn2_pushed) {freeze = !freeze; }
+         btn2_pushed=false;
       }
       buttonState1 = digitalRead(buttonPin1);
       buttonState2 = digitalRead(buttonPin2);
@@ -292,46 +346,92 @@ void task_button(void * ptr){
    vTaskDelete(NULL);
 }
 
-void task_screen_draw(void * ptr){
+void task_touchpad(void * ptr){
+   // touch.begin();
+   uint16_t x, y;
+   uint16_t start_x, start_y;
+   bool long_pushed = true;
+   unsigned long touch_pushed_start_time =  0;
+   bool touched = false;
+   
    for(;power_on==true;){
-      touch.update();
-      bool touched = touch.tp.touching;
-      if( touched )
-      {
-         test_points[0][0] = touch.tp.x;
-         test_points[0][1] = touch.tp.y;
+      if (touch_updated) {
+         if( touch.tp.touching )
+         {
+            x= touch.tp.y;
+            y = 240 - touch.tp.x;
+            if (touched==false){start_x = x;  start_y = y;}
+            if (millis() - touch_pushed_start_time >= TOUCH_LONG_PUSH_T){
+               diffx= start_x-x;
+               diffy= start_y-y;
+               }
+            test_points[0][0] = x;
+            test_points[0][1] = y;
+         }else{
+            touch_pushed_start_time = millis();
+         }
+         // Serial.printf("touch: %d %d\n", touched, touch.tp.touching);
+         touched = touch.tp.touching;
+         touch_updated = false;
       }
-   // read the state of the pushbutton value:
-   buttonState1 = digitalRead(buttonPin1);
-   buttonState2 = digitalRead(buttonPin2);
+      vTaskDelay(50);
+   }
+   vTaskDelete(NULL);
+}
+
+
+void task_screen_draw(void * ptr){
+   tft.setRotation(SCREEN_ROTATION);
+   tft.fillScreen(TFT_BLACK);
+   for(;power_on==true;){
+      // 这么做是预防touch和spi总线发生冲突
+      if (!touch_updated){touch.update(); touch_updated=true;}
+
+      // read the state of the pushbutton value:
+      buttonState1 = digitalRead(buttonPin1);
+      buttonState2 = digitalRead(buttonPin2);
 
       tft.setRotation(3);
-      // drawing the picture
-      if (!lock){
-         for (i = 0 ; i < 24 ; i++){
-            for (j = 0; j < 32; j++){
-               mlx90640To[i*32 + j] = 180.0 * (mlx90640To[i*32 + j] - T_min) / (T_max - T_min);         
-               getColour(mlx90640To[i*32 + j]);
+
+      if (!freeze){ // 如果画面被暂停会跳过这个热成像图的刷新
+         // 只有画面更新才会绘制一张热成像图
+         while(lock && power_on){
+            // 阻塞画面
+            vTaskDelay(1);
+         }
+         for (int i = 0; i < 768; i++) {mlx90640To_buffer[i] = mlx90640To[i];}
+         for (int i = 0 ; i < 24 ; i++){
+            for (int j = 0; j < 32; j++){
+               mlx90640To_buffer[i*32 + j] = 180.0 * (mlx90640To_buffer[i*32 + j] - T_min) / (T_max - T_min);         
+               getColour(mlx90640To_buffer[i*32 + j]);
                tft.fillRect(280 - j * _SCALE, (240 - _SCALE * 24) + i * _SCALE, _SCALE, _SCALE, tft.color565(R_colour, G_colour, B_colour));  
+            }
          }
       }
-      }
-      
+
       tft.setRotation(SCREEN_ROTATION);
+      tft.drawCircle(test_points[0][0], test_points[0][1], 15, tft.color565(255, 255, 255));
+      draw_cross(test_points[0][0], test_points[0][1], 10);
       //  tft.setCursor(60, 220);
       //  tft.print(T_center, 1);
 
-      tft.setCursor(60, 220);
+      tft.setTextColor(TFT_WHITE, TFT_BLACK); 
+      tft.setCursor(40, 220);
       tft.printf("max: %.2f  ", T_max);
-      tft.setCursor(60, 230);
+      tft.setCursor(40, 230);
       tft.printf("min: %.2f  ", T_min);
       
-      tft.setCursor(150, 220);
+      tft.setCursor(120, 220);
       tft.printf("avg: %.2f  ", T_avg);
-      tft.setCursor(150, 230);
+      tft.setCursor(120, 230);
       tft.printf("bat: %.2f v ", bat_v);
+      
+      tft.setCursor(190, 220);
+      tft.printf("diffx: %d  ", diffx);
+      tft.setCursor(190, 230);
+      tft.printf("diffy: %d  ", diffy);
 
-      tft.setTextColor(TFT_WHITE, TFT_BLACK); 
+      
       tft.setCursor(155, 220);
       //  tft.print("C");
       
@@ -339,11 +439,11 @@ void task_screen_draw(void * ptr){
       //  tft.printf("max_pos: %d, %d ", max_x, max_y);
       //  tft.setCursor(80, 210);
       //  tft.printf("touch_state: %d, %d     ",test_points[0][0], test_points[0][1]);
-      tft.setCursor(80, 210);
-      tft.printf("button: %d, %d     ",buttonState1, buttonState2);
-      tft.drawCircle(test_points[0][1], 240 - test_points[0][0], 15, tft.color565(255, 255, 255));
-      draw_cross(test_points[0][1], 240 - test_points[0][0], 10);
-      delay(20);
+      // tft.setCursor(5, 210);
+      // // tft.printf("button: %d, %d     ",buttonState1, buttonState2);
+      // tft.printf(str_wake);
+
+      vTaskDelay(10);
    }
    vTaskDelete(NULL);
 }
@@ -354,19 +454,15 @@ void setup(void)
    touch.begin();
    // 按钮启用
 
-
    pinMode(SCREEN_BL_PIN, OUTPUT);
    
    xTaskCreate(task_mlx, "MLX_FLASHING", 1024 * 6, NULL, 1, NULL);
    xTaskCreate(task_bat, "BAT_MANAGER", 1024, NULL, 2, NULL);
-
-   
    tft.init();
-   tft.setRotation(SCREEN_ROTATION);
-   tft.fillScreen(TFT_BLACK);
    xTaskCreate(task_screen_draw, "SCREEN", 1024 * 8, NULL, 2, NULL);
    xTaskCreate(task_smooth_on, "SMOOTH_ON", 1024, NULL, 2, NULL);
    xTaskCreate(task_button,    "BUTTON", 1024, NULL, 2, NULL);
+   xTaskCreate(task_touchpad,  "TOUCHPAD", 1024 * 3, NULL, 3, NULL);
    // draw the colour-scale
 }
 
