@@ -1,5 +1,6 @@
 # QF_Thermal_imager
 为启凡-找羊科创设计的热成像仪提供开源的软件实现。
+![f3fef5ace7c51856d574eea959b2053](https://github.com/umeiko/QF_Thermal_imager/assets/58870893/b6a5ed27-b0dc-4005-88ee-1fd8aeafe02b)
 
 
 
@@ -71,3 +72,4 @@
 `./assets/***.h` -> `./.pio/libdeps/esp32-s3-fh4r2/TFT_eSPI/`
 
 ![电路图](./assets/QF.png)
+![c14aa23428cbf17d94bd4376c87638f](https://github.com/umeiko/QF_Thermal_imager/assets/58870893/c466e639-d6f2-458f-9bac-a1ef761e28e4)
