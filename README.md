@@ -1,4 +1,4 @@
-# QF_Thermal_imager
+# ESP32S3_Touchscreen_Thermal
 为启凡-找羊科创设计的热成像仪提供开源的软件实现。
 ![f3fef5ace7c51856d574eea959b2053](https://github.com/umeiko/QF_Thermal_imager/assets/58870893/b6a5ed27-b0dc-4005-88ee-1fd8aeafe02b)
 
