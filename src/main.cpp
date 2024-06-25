@@ -298,7 +298,8 @@ void task_mlx(void * ptr){
 // 关机
 void power_off(){
    // pinMode(GPIO_NUM_33, INPUT_PULLUP);
-   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+   // esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+   // esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0); //1 = High, 0 = Low
    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
    // rtc_gpio_isolate(MLX_VDD);
    // rtc_gpio_isolate(SCREEN_BL_PIN);
@@ -320,9 +321,9 @@ void power_off(){
    digitalWrite(MLX_VDD, LOW);
    ledcWrite(0, 0);
    digitalWrite(SCREEN_BL_PIN, LOW);
-   vTaskDelay(1000);
-   esp_light_sleep_start();
-   // esp_deep_sleep_start();
+   vTaskDelay(2000);
+   // esp_light_sleep_start();
+   esp_deep_sleep_start();
    vTaskDelete(NULL); 
 }
 
@@ -381,9 +382,10 @@ void task_button(void * ptr){
          if (digitalRead(buttonPin1) == LOW){btn1_pushed=true;}
       }else{
          btn1_pushed_start_time = millis();
-         if (btn1_pushed) {
-            show_local_temp_flag = !show_local_temp_flag;
-            if (freeze==true){clear_local_temp=true;}
+         if (btn1_pushed) {  // 短按btn1
+            test_points[0][0] = 0;
+            test_points[0][1] = 0;
+            if (freeze==true){ clear_local_temp=true; }
             }
          btn1_pushed=false;
       }
@@ -452,8 +454,8 @@ void task_touchpad(void * ptr){
 void task_screen_draw(void * ptr){
    tft.setRotation(SCREEN_ROTATION);
    tft.fillScreen(TFT_BLACK);
-   test_points[0][0] = 140;
-   test_points[0][1] = 120;
+   test_points[0][0] = 120;
+   test_points[0][1] = 110;
 
    // tft.setBitmapColor(16);
    for(;power_on==true;){
@@ -486,7 +488,8 @@ void task_screen_draw(void * ptr){
       }
 
       tft.setRotation(SCREEN_ROTATION);
-      if (show_local_temp_flag==true) {show_local_temp(test_points[0][0], test_points[0][1]);}
+      if (test_points[0][0]==0 && test_points[0][1]==0 ){}else{show_local_temp(test_points[0][0], test_points[0][1]);}
+      // if (show_local_temp_flag==true) {show_local_temp(test_points[0][0], test_points[0][1]);}
       if (clear_local_temp==true) {draw_heat_image(false); clear_local_temp=false;}
 
       tft.setTextColor(TFT_WHITE, TFT_BLACK); 
@@ -523,19 +526,19 @@ void task_screen_draw(void * ptr){
 
 void setup(void)
  {
-   Serial.begin(115200);
+   // Serial.begin(115200);
    touch.begin();
    // 按钮启用
 
    pinMode(SCREEN_BL_PIN, OUTPUT);
    
-   xTaskCreate(task_mlx, "MLX_FLASHING", 1024 * 6, NULL, 1, NULL);
-   xTaskCreate(task_bat, "BAT_MANAGER", 1024, NULL, 2, NULL);
+   xTaskCreate(task_mlx, "MLX_FLASHING", 1024 * 8, NULL, 1, NULL);
+   xTaskCreate(task_bat, "BAT_MANAGER", 1024 * 2, NULL, 3, NULL);
    tft.init();
-   xTaskCreate(task_screen_draw, "SCREEN", 1024 * 8, NULL, 2, NULL);
+   xTaskCreate(task_screen_draw, "SCREEN", 1024 * 10, NULL, 2, NULL);
    xTaskCreate(task_smooth_on, "SMOOTH_ON", 1024, NULL, 2, NULL);
-   xTaskCreate(task_button,    "BUTTON", 1024, NULL, 2, NULL);
-   xTaskCreate(task_touchpad,  "TOUCHPAD", 1024 * 3, NULL, 3, NULL);
+   xTaskCreate(task_button,    "BUTTON", 1024 * 6, NULL, 3, NULL);
+   xTaskCreate(task_touchpad,  "TOUCHPAD", 1024 * 6, NULL, 3, NULL);
    // draw the colour-scale
 }
 
