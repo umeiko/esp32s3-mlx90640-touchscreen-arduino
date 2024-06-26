@@ -2,6 +2,7 @@
 为启凡-找羊科创设计的热成像仪提供开源的软件实现。
 ![f3fef5ace7c51856d574eea959b2053](https://github.com/umeiko/QF_Thermal_imager/assets/58870893/b6a5ed27-b0dc-4005-88ee-1fd8aeafe02b)
 探头型号：MLX90640 分辨率 24 * 32
+
 ## 用法：
 - 右上角 按钮 静止画面。
 - 左下角 按钮 按下开启。
@@ -10,6 +11,8 @@
 - 触屏长按上下滑动调节亮度。
 - 右下角 按钮 短按开启 / 关闭点测温。
 
+## 刷机方法：
+在[这里](https://github.com/umeiko/ESP32S3_Touchscreen_Thermal/releases/tag/v0.0.1)下载固件及查看刷机方法。
 
 ## 怎么在`platformio`中配置这个单片机信息
 
