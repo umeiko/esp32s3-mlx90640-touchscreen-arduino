@@ -30,6 +30,9 @@
 #define TOUCH_LONG_PUSH_T 200
 #define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds */
 #define TIME_TO_SLEEP  5        /* Time ESP32 will go to sleep (in seconds) */
+#define GRIDCOLOR  0xA815
+
+
 const int buttonPin1 = 0;  
 const int buttonPin2 = 21; 
 
@@ -38,11 +41,11 @@ bool buttonState1 = 1;
 bool buttonState2 = 1;  
 
 const byte MLX90640_address = 0x33;
-static float mlx90640To[768];
-static float mlx90640To_buffer[768];
+static float mlx90640To[768];  // 从MLX90640读取的温度数据
+static float mlx90640To_buffer[768];  // 缓存区域，复制MLX90640读取的温度数据并用于绘制热力图
 paramsMLX90640 mlx90640;
 
-static uint16_t heat_bitmap[32*_SCALE][24*_SCALE] = {};
+static uint16_t heat_bitmap[32*_SCALE * 24*_SCALE] = {}; // rgb56556形式的内存，用于存储要渲染的图像
 
 uint16_t test_points[5][2];
 int brightness = 128;
@@ -55,10 +58,10 @@ int max_x, max_y, min_x, min_y;
 
 float bat_v;
 
-bool lock = false;
+bool lock = false;  // 简单的锁，防止拷贝温度数据的时候对内存的访问冲突
 bool touch_updated = false;
 
-bool power_on = true;
+bool power_on = true;  // 是否开机
 bool freeze = false;  // 暂停画面
 bool show_local_temp_flag = true;  // 是否显示点测温
 bool clear_local_temp = false;     // 点测温清除
@@ -137,17 +140,19 @@ void getColour(int j)
        }
 }
 
-void update_bitmap(){
-   // const uint8_t heat_bitmap[24*_SCALE][32*_SCALE + 1] = {};
-   for(int i=0;i<32*_SCALE;i++){
-      for(int j=0;j<24*_SCALE;j++){
-         getColour(mlx90640To_buffer[i / _SCALE * 32 + j / _SCALE]);
-         heat_bitmap[i][j] = tft.color565(R_colour, G_colour, B_colour);
-         // Serial.printf("heat_bitmap[%d][%d]=%d, frombuffer[%d] \n", i, j, heat_bitmap[i][j], i / _SCALE * 32 + j / _SCALE);
-         // vTaskDelay(300);
+void print_bitmap(int x, int y, uint16_t * data){
+   
+   for(int i=0; i<y; i++){
+      for(int j=0; j<x; j++){
+         Serial.print(data[i*j]);
+         Serial.print(" ");
       }
+      Serial.print("\n");
    }
+   Serial.print("\n\n");
 }
+
+
 
 //Returns true if the MLX90640 is detected on the I2C bus
 boolean isConnected()
@@ -177,18 +182,48 @@ void show_local_temp(int x, int y){
    tft.printf("%.2f", temp_xy);
 }  
 
-void draw_heat_image(bool re_mapcolor=true){
-   tft.setRotation(3);
-   for (int i = 0 ; i < 24 ; i++){
-   for (int j = 0; j < 32; j++){
-      if (re_mapcolor) {mlx90640To_buffer[i*32 + j] = 180.0 * (mlx90640To_buffer[i*32 + j] - T_min) / (T_max - T_min);}
-      getColour(mlx90640To_buffer[i*32 + j]);
-      tft.fillRect(280 - j * _SCALE, (240 - _SCALE * 24) + i * _SCALE, _SCALE, _SCALE, tft.color565(R_colour, G_colour, B_colour));  
-      // tft.drawBitmap();
+// void draw_heat_image(bool re_mapcolor=true){
+//    tft.setRotation(3);
+//    for (int i = 0 ; i < 24 ; i++){
+//    for (int j = 0; j < 32; j++){
+//       if (re_mapcolor) {mlx90640To_buffer[i*32 + j] = 180.0 * (mlx90640To_buffer[i*32 + j] - T_min) / (T_max - T_min);}
+//       getColour(mlx90640To_buffer[i*32 + j]);
+//       tft.fillRect(280 - j * _SCALE, (240 - _SCALE * 24) + i * _SCALE, _SCALE, _SCALE, tft.color565(R_colour, G_colour, B_colour));  
+//       // tft.drawBitmap();
+//       }
+//    }
+//    tft.setRotation(SCREEN_ROTATION);
+// }
+
+// 在一块图像内存上绘制一个同色的方块
+void draw_block_bitmap(int x, int y, int w, int max_x, int max_y, uint16_t color, uint16_t* data){
+   for(int i =y; i < y + w; i++){
+        for(int j = x; j < x + w; j++){
+         data[i * max_x + j] = color;
       }
    }
-   tft.setRotation(SCREEN_ROTATION);
 }
+
+// 更新图像内存中的图像
+void update_bitmap(bool re_mapcolor=true){
+   for(int y=0; y<24; y++){ 
+      for(int x=0; x<32; x++){
+         int id = (23-y) * 32 + x;
+         if (re_mapcolor) {mlx90640To_buffer[id] = 180.0 * (mlx90640To_buffer[id] - T_min) / (T_max - T_min);}
+         getColour(mlx90640To_buffer[id]);
+         draw_block_bitmap(x*_SCALE, y*_SCALE, _SCALE, 32*_SCALE, 24*_SCALE, tft.color565(R_colour, G_colour, B_colour), heat_bitmap);
+      } 
+   }
+}
+
+// 在屏幕上绘制热力图
+void draw_heat_image(bool re_mapcolor=true){
+   // tft.setRotation(3);
+   tft.setRotation(SCREEN_ROTATION);
+   update_bitmap(re_mapcolor);
+   tft.pushImage(0, 0, 32*_SCALE, 24*_SCALE, heat_bitmap);
+}
+
 
 // 热成像读取多任务
 void task_mlx(void * ptr){
@@ -472,26 +507,17 @@ void task_screen_draw(void * ptr){
             // 阻塞画面
             vTaskDelay(1);
          }
-         for (int i = 0; i < 768; i++) {mlx90640To_buffer[i] = mlx90640To[i];}
+         for (int i = 0; i < 768; i++) {mlx90640To_buffer[i] = mlx90640To[i];}  // 拷贝温度信息
          draw_heat_image();
-         // for (int i = 0 ; i < 24 ; i++){
-         //    for (int j = 0; j < 32; j++){
-         //       mlx90640To_buffer[i*32 + j] = 180.0 * (mlx90640To_buffer[i*32 + j] - T_min) / (T_max - T_min);         
-         //       getColour(mlx90640To_buffer[i*32 + j]);
-         //       tft.fillRect(280 - j * _SCALE, (240 - _SCALE * 24) + i * _SCALE, _SCALE, _SCALE, tft.color565(R_colour, G_colour, B_colour));  
-         //       // tft.drawBitmap();
-         //    }
-         // }
-         // update_bitmap();
-         // tft.drawBitmap(280, 240 - _SCALE * 24, (const uint8_t *)heat_bitmap, 32*_SCALE, 24*_SCALE, 0xFFFF);
-         // tft.pushImage(280, 240, 32*_SCALE, 24*_SCALE, (const uint16_t *)heat_bitmap);
       }
 
       tft.setRotation(SCREEN_ROTATION);
       if (test_points[0][0]==0 && test_points[0][1]==0 ){}else{show_local_temp(test_points[0][0], test_points[0][1]);}
       // if (show_local_temp_flag==true) {show_local_temp(test_points[0][0], test_points[0][1]);}
       if (clear_local_temp==true) {draw_heat_image(false); clear_local_temp=false;}
+      // tft.endWrite();
 
+      tft.setRotation(SCREEN_ROTATION);
       tft.setTextColor(TFT_WHITE, TFT_BLACK); 
       tft.setCursor(40, 220);
       tft.printf("max: %.2f  ", T_max);
@@ -535,6 +561,7 @@ void setup(void)
    xTaskCreate(task_mlx, "MLX_FLASHING", 1024 * 8, NULL, 1, NULL);
    xTaskCreate(task_bat, "BAT_MANAGER", 1024 * 2, NULL, 3, NULL);
    tft.init();
+   tft.setSwapBytes(true);
    xTaskCreate(task_screen_draw, "SCREEN", 1024 * 10, NULL, 2, NULL);
    xTaskCreate(task_smooth_on, "SMOOTH_ON", 1024, NULL, 2, NULL);
    xTaskCreate(task_button,    "BUTTON", 1024 * 6, NULL, 3, NULL);
