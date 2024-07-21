@@ -1,5 +1,6 @@
 # ESP32S3_Touchscreen_Thermal
-为启凡-找羊科创设计的热成像仪提供开源的软件实现。
+为启凡-找羊科创设计的热成像仪提供开源的软件实现。本项目基于Arduino。ESP-IDF的实现可以在[这里找到](https://github.com/umeiko/esp32s3-mlx90640-touchscreen-espIDF)
+
 ![f3fef5ace7c51856d574eea959b2053](https://github.com/umeiko/QF_Thermal_imager/assets/58870893/b6a5ed27-b0dc-4005-88ee-1fd8aeafe02b)
 探头型号：MLX90640 分辨率 24 * 32
 
