@@ -41,8 +41,12 @@ bool buttonState1 = 1;
 bool buttonState2 = 1;  
 
 const byte MLX90640_address = 0x33;
-static float mlx90640To[768];  // 从MLX90640读取的温度数据
-static float mlx90640To_buffer[768];  // 缓存区域，复制MLX90640读取的温度数据并用于绘制热力图
+static float mlx90640To[768];              // 从MLX90640读取的温度数据
+static float mlx90640To_buffer[768];       // 缓存区域，复制MLX90640读取的温度数据并用于绘制热力图
+static float mlx90640To_send_buffer[768];  // 缓存区域，复制MLX90640读取的温度数据，用于发送到上位机
+static uint8_t mlx90640To_Serial_buffer[768 * 4];  // 缓存区域，复制MLX90640读取的温度数据，用于发送到上位机
+
+
 paramsMLX90640 mlx90640;
 
 static uint16_t heat_bitmap[32*_SCALE * 24*_SCALE] = {}; // rgb56556形式的内存，用于存储要渲染的图像
@@ -59,6 +63,7 @@ int max_x, max_y, min_x, min_y;
 float bat_v;
 
 bool lock = false;  // 简单的锁，防止拷贝温度数据的时候对内存的访问冲突
+bool serial_cp_lock = false;  // 简单的锁，防止拷贝温度数据的时候对内存的访问冲突
 bool touch_updated = false;
 
 bool power_on = true;  // 是否开机
@@ -293,7 +298,7 @@ void task_mlx(void * ptr){
          // mlx90640To[1*32 + 21] = 0.5 * (mlx90640To[1*32 + 20] + mlx90640To[1*32 + 22]);    // eliminate the error-pixels
          // mlx90640To[4*32 + 30] = 0.5 * (mlx90640To[4*32 + 29] + mlx90640To[4*32 + 31]);    // eliminate the error-pixels
          
-         lock = false;
+         
 
          T_min = mlx90640To[0];
          T_max = mlx90640To[0];
@@ -325,6 +330,7 @@ void task_mlx(void * ptr){
             }
          T_avg = T_avg / 768;
          }
+      lock = false;
       vTaskDelay(5);
    }
    vTaskDelete(NULL); 
@@ -332,21 +338,8 @@ void task_mlx(void * ptr){
 
 // 关机
 void power_off(){
-   // pinMode(GPIO_NUM_33, INPUT_PULLUP);
-   // esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
-   // esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0); //1 = High, 0 = Low
-   esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
-   // rtc_gpio_isolate(MLX_VDD);
-   // rtc_gpio_isolate(SCREEN_BL_PIN);
-   // rtc_gpio_isolate(MLX_SDA);
-   // rtc_gpio_isolate(MLX_SCL);
-   // rtc_gpio_isolate(TOUCH_SDA);
-   // rtc_gpio_isolate(TOUCH_SCL);
-   // rtc_gpio_isolate(TOUCH_RST);
-   
-   // esp_deep_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
-   // esp_deep_sleep_start();
 
+   esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
    for(int i=brightness; i>0; i--){
       ledcWrite(0, i);
       vTaskDelay(2);
@@ -393,8 +386,9 @@ void task_bat(void * ptr){
    float r1 = 300.;
    float r2 = 680.;
    float coef = (r1+r2) / r2;
+   int adc_value = analogRead(BAT_ADC);
    for(;power_on==true;){
-      int adc_value = analogRead(BAT_ADC);
+      adc_value = analogRead(BAT_ADC);
       bat_v = (float)adc_value / 4096 * 3.3 * coef;
       vTaskDelay(1000);
    }
@@ -507,8 +501,10 @@ void task_screen_draw(void * ptr){
             // 阻塞画面
             vTaskDelay(1);
          }
-         for (int i = 0; i < 768; i++) {mlx90640To_buffer[i] = mlx90640To[i];}  // 拷贝温度信息
+         // for (int i = 0; i < 768; i++) {mlx90640To_buffer[i] = mlx90640To[i];}  // 拷贝温度信息
+         memcpy(mlx90640To_buffer, mlx90640To, 768 * sizeof(float));
          draw_heat_image();
+         
       }
 
       tft.setRotation(SCREEN_ROTATION);
@@ -534,25 +530,52 @@ void task_screen_draw(void * ptr){
       tft.setCursor(190, 230);
       tft.printf("       %d  ", brightness);
 
-      tft.setCursor(155, 220);
-      //  tft.print("C");
-      
-      //  tft.setCursor(80, 200);
-      //  tft.printf("max_pos: %d, %d ", max_x, max_y);
-      //  tft.setCursor(80, 210);
-      //  tft.printf("touch_state: %d, %d     ",test_points[0][0], test_points[0][1]);
-      // tft.setCursor(5, 210);
-      // // tft.printf("button: %d, %d     ",buttonState1, buttonState2);
-      // tft.printf(str_wake);
-
       vTaskDelay(10);
    }
    vTaskDelete(NULL);
 }
 
+// 通过串口传输单个浮点数据
+void send_float_as_uint8(float f, uint8_t *buf) {
+   memcpy(buf, &f, sizeof(float));
+   Serial.write(buf, sizeof(float));
+}
+
+// 通过串口把整个温度数据矩阵传输
+void send_to_serial() {
+   memcpy(mlx90640To_Serial_buffer, mlx90640To_send_buffer, 768 * sizeof(float));
+   Serial.write(mlx90640To_Serial_buffer, 768 * sizeof(float));
+}
+
+void task_serial_communicate(void * ptr){
+   vTaskDelay(3000);
+   uint8_t send_buf[4];
+
+   for(;power_on==true;){
+      // 拷贝温度信息
+      while (lock == true) {vTaskDelay(1);}
+      memcpy(mlx90640To_send_buffer, mlx90640To, 768 * sizeof(float));
+      // for (int i = 0; i < 768; i++) {mlx90640To_send_buffer[i] = mlx90640To[i];} 
+      Serial.print("BEGIN");
+      send_float_as_uint8(T_max, send_buf);
+      send_float_as_uint8(T_min, send_buf);
+      send_float_as_uint8(T_avg, send_buf);
+      // for (int i = 0; i < 768; i++){
+      //    send_float_as_uint8(mlx90640To_send_buffer[i], send_buf);
+      //    if(i % 5==0){vTaskDelay(1);}
+      // }
+      send_to_serial();
+      Serial.print("END");
+      vTaskDelay(10);
+   }
+   vTaskDelete(NULL);
+}
+
+
+
 void setup(void)
  {
-   // Serial.begin(115200);
+   Serial.begin(921600);
    touch.begin();
    // 按钮启用
 
@@ -566,7 +589,7 @@ void setup(void)
    xTaskCreate(task_smooth_on, "SMOOTH_ON", 1024, NULL, 2, NULL);
    xTaskCreate(task_button,    "BUTTON", 1024 * 6, NULL, 3, NULL);
    xTaskCreate(task_touchpad,  "TOUCHPAD", 1024 * 6, NULL, 3, NULL);
-   // draw the colour-scale
+   xTaskCreate(task_serial_communicate, "SERIAL_COMM", 1024 * 10, NULL, 5, NULL);
 }
 
 void loop() 
