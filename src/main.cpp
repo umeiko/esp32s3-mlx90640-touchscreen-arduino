@@ -11,6 +11,12 @@
 #include "MLX90640_API.h"
 #include "MLX90640_I2C_Driver.h"
 #include "CST816T.h"
+#include "BilinearInterpolation.h"
+#include "kalman_filter.h"
+// #include <WiFi.h>
+// #include "esp_timer.h"
+// #include "img_converters.h"
+// #include "esp_http_server.h"
 
 #define TA_SHIFT 8 //Default shift for MLX90640 in open air
 #define MLX_VDD  11
@@ -32,6 +38,7 @@
 #define TIME_TO_SLEEP  5        /* Time ESP32 will go to sleep (in seconds) */
 #define GRIDCOLOR  0xA815
 
+#define SEND_TO_SERIAL
 
 const int buttonPin1 = 0;  
 const int buttonPin2 = 21; 
@@ -42,14 +49,23 @@ bool buttonState2 = 1;
 
 const byte MLX90640_address = 0x33;
 static float mlx90640To[768];              // 从MLX90640读取的温度数据
-static float mlx90640To_buffer[768];       // 缓存区域，复制MLX90640读取的温度数据并用于绘制热力图
-static float mlx90640To_send_buffer[768];  // 缓存区域，复制MLX90640读取的温度数据，用于发送到上位机
-static uint8_t mlx90640To_Serial_buffer[768 * 4];  // 缓存区域，复制MLX90640读取的温度数据，用于发送到上位机
 
+// static float mlx90640To_buffer[768];       // 缓存区域，复制MLX90640读取的温度数据并用于绘制热力图
+static int mlx90640To_buffer[768];       // 缓存区域，复制MLX90640读取的温度数据并用于绘制热力图
+
+#if defined(SEND_TO_SERIAL)
+static float mlx90640To_send_buffer[768];  // 缓存区域，复制MLX90640读取的温度数据，用于发送到上位机
+static uint8_t* mlx90640To_Serial_buffer = (uint8_t*)mlx90640To_send_buffer;  
+#endif
+
+
+
+static KFPTypeS kfpVar3Array[768];  // 卡尔曼滤波器变量数组
 
 paramsMLX90640 mlx90640;
 
 static uint16_t heat_bitmap[32*_SCALE * 24*_SCALE] = {}; // rgb56556形式的内存，用于存储要渲染的图像
+
 
 uint16_t test_points[5][2];
 int brightness = 128;
@@ -63,7 +79,6 @@ int max_x, max_y, min_x, min_y;
 float bat_v;
 
 bool lock = false;  // 简单的锁，防止拷贝温度数据的时候对内存的访问冲突
-bool serial_cp_lock = false;  // 简单的锁，防止拷贝温度数据的时候对内存的访问冲突
 bool touch_updated = false;
 
 bool power_on = true;  // 是否开机
@@ -71,77 +86,76 @@ bool freeze = false;  // 暂停画面
 bool show_local_temp_flag = true;  // 是否显示点测温
 bool clear_local_temp = false;     // 点测温清除
 
+
 TFT_eSPI tft = TFT_eSPI();  
 CST816T touch(TOUCH_SDA, TOUCH_SCL, TOUCH_RST, -1);	// sda, scl, rst, irq
 
 int diffx, diffy;
 
+
+
+
+// 初始化卡尔曼滤波器数组的函数
+const static float init_P = 0.1;
+const static float init_G = 0.0;
+const static float init_O = 26;
+void KalmanArrayInit() {
+    // 循环遍历数组中的每个元素
+    for (int i = 0; i < 768; ++i) {
+        // 初始化每个元素
+        kfpVar3Array[i] = (KFPTypeS){
+         init_P,     //估算协方差. 初始化值为 0.02
+         init_G,     //卡尔曼增益. 初始化值为 0
+         init_O    //卡尔曼滤波器输出. 初始化值为 0
+        };
+    }
+}
+
 // ===============================
 // ===== determine the colour ====
 // ===============================
-
-// const char* str_wake[50];
-// // 打印唤醒原因
-// void print_wakeup_reason(){
-//   esp_sleep_wakeup_cause_t wakeup_reason;
-
-//   wakeup_reason = esp_sleep_get_wakeup_cause();
-
-//   switch(wakeup_reason)
-//   {
-//     case ESP_SLEEP_WAKEUP_EXT0 : strcpy("Wakeup caused by external signal using RTC_IO", str_wake); break;
-//     case ESP_SLEEP_WAKEUP_EXT1 : strcpy("Wakeup caused by external signal using RTC_CNTL", str_wake); break;
-//     case ESP_SLEEP_WAKEUP_TIMER : strcpy("Wakeup caused by timer", str_wake); break;
-//     case ESP_SLEEP_WAKEUP_TOUCHPAD : strcpy("Wakeup caused by touchpad", str_wake); break;
-//     case ESP_SLEEP_WAKEUP_ULP : strcpy("Wakeup caused by ULP program", str_wake); break;
-
-//     default : sprintf(str_wake, "Wakeup was not caused by deep sleep: %d\n",wakeup_reason); break;
-//   }
-// }
-
-
 void getColour(int j)
    {
     if (j >= 0 && j < 30)
        {
         R_colour = 0;
         G_colour = 0;
-        B_colour = 20 + (120.0/30.0) * j;
+        B_colour = 20 + 4 * j;
        }
     
     if (j >= 30 && j < 60)
        {
-        R_colour = (120.0 / 30) * (j - 30.0);
+        R_colour = 4 * (j - 30);
         G_colour = 0;
-        B_colour = 140 - (60.0/30.0) * (j - 30.0);
+        B_colour = 140 - 2 * (j - 30);
        }
 
     if (j >= 60 && j < 90)
        {
-        R_colour = 120 + (135.0/30.0) * (j - 60.0);
+        R_colour = 120 + 4 * (j - 60);
         G_colour = 0;
-        B_colour = 80 - (70.0/30.0) * (j - 60.0);
+        B_colour = 80 - 2 * (j - 60);
        }
 
     if (j >= 90 && j < 120)
        {
         R_colour = 255;
-        G_colour = 0 + (60.0/30.0) * (j - 90.0);
-        B_colour = 10 - (10.0/30.0) * (j - 90.0);
+        G_colour = 0 + 2 * (j - 90);
+        B_colour = 10 - (j - 90) / 3;
        }
 
     if (j >= 120 && j < 150)
        {
         R_colour = 255;
-        G_colour = 60 + (175.0/30.0) * (j - 120.0);
+        G_colour = 60 + 175 * (j - 120) / 30;
         B_colour = 0;
        }
 
     if (j >= 150 && j <= 180)
        {
         R_colour = 255;
-        G_colour = 235 + (20.0/30.0) * (j - 150.0);
-        B_colour = 0 + 255.0/30.0 * (j - 150.0);
+        G_colour = 235 + (j - 150) * 20 / 30;
+        B_colour = 0 + 85 * (j - 150) / 10;
        }
 }
 
@@ -221,11 +235,26 @@ void update_bitmap(bool re_mapcolor=true){
    }
 }
 
+void update_bitmap_bio_linear(){
+   float value;
+   for(int y=0; y<24 * _SCALE; y++){ 
+      for(int x=0; x<32 * _SCALE; x++){
+         value = bio_linear_interpolation(x, y, mlx90640To_buffer);
+         getColour(value);
+         heat_bitmap[y * 32 * _SCALE + x] = tft.color565(R_colour, G_colour, B_colour);
+      }
+   }
+}
+
+
 // 在屏幕上绘制热力图
 void draw_heat_image(bool re_mapcolor=true){
    // tft.setRotation(3);
    tft.setRotation(SCREEN_ROTATION);
-   update_bitmap(re_mapcolor);
+   // update_bitmap(re_mapcolor);
+   if(re_mapcolor){
+      update_bitmap_bio_linear();
+   }
    tft.pushImage(0, 0, 32*_SCALE, 24*_SCALE, heat_bitmap);
 }
 
@@ -317,6 +346,7 @@ void task_mlx(void * ptr){
                      max_x = i / 32;
                      max_y = i % 32;
                      }
+               mlx90640To[i] = KalmanFilter(&kfpVar3Array[i], mlx90640To[i]);
                }
             else if(i > 0)   // temperature out of range
                {
@@ -442,6 +472,7 @@ void task_touchpad(void * ptr){
    unsigned long touch_pushed_start_time =  0;
    bool touched = false;
    int start_br = brightness;
+   
    for(;power_on==true;){
       if (touch_updated) {
          if( touch.tp.touching )
@@ -501,8 +532,12 @@ void task_screen_draw(void * ptr){
             // 阻塞画面
             vTaskDelay(1);
          }
-         // for (int i = 0; i < 768; i++) {mlx90640To_buffer[i] = mlx90640To[i];}  // 拷贝温度信息
-         memcpy(mlx90640To_buffer, mlx90640To, 768 * sizeof(float));
+         for (int i = 0; i < 768; i++) {
+            // mlx90640To_buffer[i] = mlx90640To[i];
+            mlx90640To_buffer[i] = (int)(180.0 * (mlx90640To[i] - T_min) / (T_max - T_min));
+         }  // 拷贝温度信息
+
+         // memcpy(mlx90640To_buffer, mlx90640To, 768 * sizeof(float));
          draw_heat_image();
          
       }
@@ -535,6 +570,7 @@ void task_screen_draw(void * ptr){
    vTaskDelete(NULL);
 }
 
+#if defined(SEND_TO_SERIAL)
 // 通过串口传输单个浮点数据
 void send_float_as_uint8(float f, uint8_t *buf) {
    memcpy(buf, &f, sizeof(float));
@@ -543,7 +579,7 @@ void send_float_as_uint8(float f, uint8_t *buf) {
 
 // 通过串口把整个温度数据矩阵传输
 void send_to_serial() {
-   memcpy(mlx90640To_Serial_buffer, mlx90640To_send_buffer, 768 * sizeof(float));
+   // memcpy(mlx90640To_Serial_buffer, mlx90640To_send_buffer, 768 * sizeof(float));
    Serial.write(mlx90640To_Serial_buffer, 768 * sizeof(float));
 }
 
@@ -570,29 +606,33 @@ void task_serial_communicate(void * ptr){
    }
    vTaskDelete(NULL);
 }
-
-
+#endif
 
 void setup(void)
  {
+
    Serial.begin(921600);
    touch.begin();
    // 按钮启用
 
    pinMode(SCREEN_BL_PIN, OUTPUT);
-   
+   vTaskDelay(500);
    xTaskCreate(task_mlx, "MLX_FLASHING", 1024 * 8, NULL, 1, NULL);
    xTaskCreate(task_bat, "BAT_MANAGER", 1024 * 2, NULL, 3, NULL);
    tft.init();
    tft.setSwapBytes(true);
-   xTaskCreate(task_screen_draw, "SCREEN", 1024 * 10, NULL, 2, NULL);
+   xTaskCreatePinnedToCore(task_screen_draw, "SCREEN", 1024 * 15, NULL, 2, NULL, 0);
    xTaskCreate(task_smooth_on, "SMOOTH_ON", 1024, NULL, 2, NULL);
-   xTaskCreate(task_button,    "BUTTON", 1024 * 6, NULL, 3, NULL);
-   xTaskCreate(task_touchpad,  "TOUCHPAD", 1024 * 6, NULL, 3, NULL);
+   xTaskCreatePinnedToCore(task_button,    "BUTTON", 1024 * 6, NULL, 3, NULL, 1);
+   xTaskCreatePinnedToCore(task_touchpad,  "TOUCHPAD", 1024 * 3, NULL, 3, NULL, 1);
+   #if defined(SEND_TO_SERIAL)
    xTaskCreate(task_serial_communicate, "SERIAL_COMM", 1024 * 10, NULL, 5, NULL);
+   #endif
+
 }
 
 void loop() 
 {
+//  if (!touch_updated){touch.update(); touch_updated=true;}
  vTaskDelay(3000);
 }
