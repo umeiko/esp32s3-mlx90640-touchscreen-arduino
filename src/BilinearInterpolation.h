@@ -17,7 +17,6 @@
 static const float scale_x = 1. / 9.;
 static const float scale_y = 1. / 9.;
 
-float dst_data[DST_W * DST_H] = {};
 
 float min(float a, float b){
     return a < b ? a : b;
@@ -33,50 +32,6 @@ inline float getValue(int y, int x, float *datas){
 
 inline int getValue(int y, int x, int *datas){
     return datas[x + (23 - y) * SRC_W];
-}
-
-// 双线性插值，返回插值结束的数组的指针
-float* bio_linear_interpolation(float *src_data){
-    float src_x, src_y, frac_x, frac_y;
-    int src_x0, src_y0, src_x1, src_y1;
-    float value00, value01, value10, value11, v0, v1;
-    
-    for(int dst_y=0; dst_y<DST_H; dst_y++){
-        for(int dst_x=0; dst_x<DST_W; dst_x++){
-            
-            // 目标在源数据上的坐标
-            src_x = (dst_x + 0.5) * scale_x - 0.5;
-            src_y = (dst_y + 0.5) * scale_y - 0.5;
-
-            // 找到四个最近邻点的位置
-            src_x0 = (int)floor(src_x);
-            src_y0 = (int)floor(src_y);
-            src_x1 = (int)ceil(src_x);
-            src_y1 = (int)ceil(src_y);
-
-            // 确保不超出源图像边界
-            src_x1 = min(src_x1, SRC_W - 1);
-            src_y1 = min(src_y1, SRC_H - 1);
-
-            // 计算分数部分
-            frac_x = src_x - src_x0;
-            frac_y = src_y - src_y0;
-
-            // 获取四个最近邻点的值
-            value00 = getValue(src_y0, src_x0, src_data);
-            value01 = getValue(src_y0, src_x1, src_data);
-            value10 = getValue(src_y1, src_x0, src_data);
-            value11 = getValue(src_y1, src_x1, src_data);
-
-            // 沿x轴的线性插值
-            v0 = value00 * (1 - frac_x) + value01 * frac_x;
-            v1 = value10 * (1 - frac_x) + value11 * frac_x;
-
-            // 沿y轴的线性插值
-            dst_data[dst_x + dst_y * DST_W] = v0 * (1 - frac_y) + v1 * frac_y;
-        }
-    }
-    return dst_data;
 }
 
 

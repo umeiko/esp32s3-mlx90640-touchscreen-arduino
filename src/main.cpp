@@ -401,7 +401,7 @@ void task_smooth_on(void * ptr){
    ledcSetup(0, 3000, 10);
    ledcAttachPin(SCREEN_BL_PIN, 0);
    ledcWrite(0, 0);
-   vTaskDelay(100);
+   vTaskDelay(500);
    for(int i=0; i<brightness; i++){
       ledcWrite(0, i);
       vTaskDelay(2);
@@ -429,6 +429,7 @@ void task_button(void * ptr){
    pinMode(buttonPin1, INPUT_PULLUP);
    pinMode(buttonPin2, INPUT_PULLUP);
    unsigned long btn1_pushed_start_time =  0;
+   unsigned long btn2_pushed_start_time =  0;
    bool btn2_pushed = false;
    bool btn1_pushed = false;
    for(;power_on==true;){
@@ -449,10 +450,14 @@ void task_button(void * ptr){
          btn1_pushed=false;
       }
 
-      if (digitalRead(buttonPin2) == LOW){
+      if (digitalRead(buttonPin2) == LOW){  // 长按btn2的功能
+         if (millis() - btn2_pushed_start_time >= BTN_LONG_PUSH_T){
+            power_off();
+         } 
          vTaskDelay(5);
          if (digitalRead(buttonPin2) == LOW){btn2_pushed=true;}
       }else{
+         btn2_pushed_start_time = millis();
          if (btn2_pushed) {freeze = !freeze; }
          btn2_pushed=false;
       }
@@ -623,7 +628,7 @@ void setup(void)
    tft.setSwapBytes(true);
    xTaskCreatePinnedToCore(task_screen_draw, "SCREEN", 1024 * 15, NULL, 2, NULL, 0);
    xTaskCreate(task_smooth_on, "SMOOTH_ON", 1024, NULL, 2, NULL);
-   xTaskCreatePinnedToCore(task_button,    "BUTTON", 1024 * 6, NULL, 3, NULL, 1);
+   xTaskCreatePinnedToCore(task_button,    "BUTTON", 1024 * 8, NULL, 3, NULL, 1);
    xTaskCreatePinnedToCore(task_touchpad,  "TOUCHPAD", 1024 * 3, NULL, 3, NULL, 1);
    #if defined(SEND_TO_SERIAL)
    xTaskCreate(task_serial_communicate, "SERIAL_COMM", 1024 * 10, NULL, 5, NULL);
