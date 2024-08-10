@@ -2,7 +2,8 @@
 为启凡-找羊科创设计的热成像仪提供开源的软件实现。本项目基于Arduino。ESP-IDF的实现可以在[这里找到](https://github.com/umeiko/esp32s3-mlx90640-touchscreen-espIDF)
 本项目同时支持上位机通信，上位机在[这里](https://github.com/umeiko/Thermal-Imaging-Receiver)
 
-![f3fef5ace7c51856d574eea959b2053](https://github.com/umeiko/QF_Thermal_imager/assets/58870893/b6a5ed27-b0dc-4005-88ee-1fd8aeafe02b)
+![21e1ddb4cc45c4b243619daac1f293d](https://github.com/user-attachments/assets/ba77d6f9-5e42-47ff-bc6c-39a7e28b3053)
+
 探头型号：MLX90640 分辨率 24 * 32
 
 ## 用法：
