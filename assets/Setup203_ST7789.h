@@ -35,6 +35,8 @@
 // #define TFT_RST  -1      // TFT reset pin connect to NodeMCU RST, must also then add 10K pull down to TFT SCK
 
 #define ESP32_DMA
+#define USE_HSPI_PORT
+
 
 #define TFT_MOSI 4
 #define TFT_SCLK 3
@@ -67,9 +69,9 @@
 #define SMOOTH_FONT
 
 
-#define SPI_FREQUENCY  27000000
+// #define SPI_FREQUENCY  27000000
 // #define SPI_FREQUENCY  80000000
-// #define SPI_FREQUENCY  40000000
+#define SPI_FREQUENCY  40000000
 
 #define SPI_READ_FREQUENCY  20000000
 

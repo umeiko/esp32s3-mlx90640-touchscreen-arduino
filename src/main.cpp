@@ -59,14 +59,9 @@ static uint8_t* mlx90640To_Serial_buffer = (uint8_t*)mlx90640To_send_buffer;
 #endif
 
 
-
 static KFPTypeS kfpVar3Array[768];  // 卡尔曼滤波器变量数组
 
 paramsMLX90640 mlx90640;
-
-static uint16_t heat_bitmap[32*_SCALE * 24*_SCALE] = {}; // rgb56556形式的内存，用于存储要渲染的图像
-
-
 uint16_t test_points[5][2];
 int brightness = 128;
 
@@ -79,7 +74,7 @@ int max_x, max_y, min_x, min_y;
 float bat_v;
 
 bool lock = false;  // 简单的锁，防止拷贝温度数据的时候对内存的访问冲突
-bool touch_updated = false;
+bool touch_lock = false;
 
 bool power_on = true;  // 是否开机
 bool freeze = false;  // 暂停画面
@@ -223,39 +218,34 @@ void draw_block_bitmap(int x, int y, int w, int max_x, int max_y, uint16_t color
    }
 }
 
-// 更新图像内存中的图像
-void update_bitmap(bool re_mapcolor=true){
-   for(int y=0; y<24; y++){ 
-      for(int x=0; x<32; x++){
-         int id = (23-y) * 32 + x;
-         if (re_mapcolor) {mlx90640To_buffer[id] = 180.0 * (mlx90640To_buffer[id] - T_min) / (T_max - T_min);}
-         getColour(mlx90640To_buffer[id]);
-         draw_block_bitmap(x*_SCALE, y*_SCALE, _SCALE, 32*_SCALE, 24*_SCALE, tft.color565(R_colour, G_colour, B_colour), heat_bitmap);
-      } 
-   }
-}
 
-void update_bitmap_bio_linear(){
-   float value;
+const int lines = 10;
+uint16_t  lineBuffer[32 * _SCALE * lines]; // Toggle buffer for lines
+uint16_t  dmaBuffer1[32 * _SCALE * lines]; // Toggle buffer for lines
+uint16_t  dmaBuffer2[32 * _SCALE * lines]; // Toggle buffer for lines
+uint16_t* dmaBufferPtr = dmaBuffer1;
+bool dmaBufferSel = 0;
+// 在屏幕上绘制热力图
+void draw_heat_image_dma(bool re_mapcolor=true){  
+   int value;
+   int now_y = 0;
+   tft.setRotation(SCREEN_ROTATION);
    for(int y=0; y<24 * _SCALE; y++){ 
       for(int x=0; x<32 * _SCALE; x++){
          value = bio_linear_interpolation(x, y, mlx90640To_buffer);
          getColour(value);
-         heat_bitmap[y * 32 * _SCALE + x] = tft.color565(R_colour, G_colour, B_colour);
+         lineBuffer[x + now_y*32 * _SCALE] = tft.color565(R_colour, G_colour, B_colour);
+      }
+      now_y ++;
+      if(now_y==lines){
+         if (dmaBufferSel) dmaBufferPtr = dmaBuffer2;
+         else dmaBufferPtr = dmaBuffer1;
+         tft.startWrite();
+         tft.pushImageDMA(0, y, 32*_SCALE, lines, lineBuffer, dmaBufferPtr);
+         tft.endWrite();
+         now_y = 0;
       }
    }
-}
-
-
-// 在屏幕上绘制热力图
-void draw_heat_image(bool re_mapcolor=true){
-   // tft.setRotation(3);
-   tft.setRotation(SCREEN_ROTATION);
-   // update_bitmap(re_mapcolor);
-   if(re_mapcolor){
-      update_bitmap_bio_linear();
-   }
-   tft.pushImage(0, 0, 32*_SCALE, 24*_SCALE, heat_bitmap);
 }
 
 
@@ -479,37 +469,35 @@ void task_touchpad(void * ptr){
    int start_br = brightness;
    
    for(;power_on==true;){
-      if (touch_updated) {
-         if( touch.tp.touching )
-         {
-            x= touch.tp.y;
-            y = 240 - touch.tp.x;
-            if (touched==false){start_x = x;  start_y = y; diffy=0; diffx=0;}  // 下降沿
-            if (millis() - touch_pushed_start_time >= TOUCH_LONG_PUSH_T){
-               long_pushed = true;
-               diffx= start_x-x;
-               diffy= start_y-y;
-               set_brightness(start_br+diffy*5);
-               }else{ // 短按的中间
-                  
-               }
-         }else{
-            touch_pushed_start_time = millis();
-            if (touched==true){  // 上升沿
-               if (start_br == brightness){
-                  if (y < 216){test_points[0][0] = x; test_points[0][1] = y;}
-               }
-               if (long_pushed==false){  // 短按时
-                  if (y < 216){test_points[0][0] = x; test_points[0][1] = y;}
-               }
-               start_br = brightness;
-               long_pushed = false;  // 上升沿将长按检测标识符进行复位
-            }  
-         }
-         // Serial.printf("touch: %d %d\n", touched, touch.tp.touching);
-         touched = touch.tp.touching;
-         touch_updated = false;
+      while ( touch_lock == true){vTaskDelay(1);}
+      touch.update();
+      if( touch.tp.touching ){
+         x= touch.tp.y;
+         y = 240 - touch.tp.x;
+         if (touched==false){start_x = x;  start_y = y; diffy=0; diffx=0;}  // 下降沿
+         if (millis() - touch_pushed_start_time >= TOUCH_LONG_PUSH_T){
+            long_pushed = true;
+            diffx= start_x-x;
+            diffy= start_y-y;
+            set_brightness(start_br+diffy*5);
+            }else{ // 短按的中间
+               
+            }
+      }else{
+         touch_pushed_start_time = millis();
+         if (touched==true){  // 上升沿
+            if (start_br == brightness){
+               if (y < 216){test_points[0][0] = x; test_points[0][1] = y;}
+            }
+            if (long_pushed==false){  // 短按时
+               if (y < 216){test_points[0][0] = x; test_points[0][1] = y;}
+            }
+            start_br = brightness;
+            long_pushed = false;  // 上升沿将长按检测标识符进行复位
+         }  
       }
+      // Serial.printf("touch: %d %d\n", touched, touch.tp.touching);
+      touched = touch.tp.touching;
       vTaskDelay(10);
    }
    vTaskDelete(NULL);
@@ -521,18 +509,15 @@ void task_screen_draw(void * ptr){
    tft.fillScreen(TFT_BLACK);
    test_points[0][0] = 120;
    test_points[0][1] = 110;
-
+   uint32_t dt = millis();
    // tft.setBitmapColor(16);
    for(;power_on==true;){
       // 这么做是预防touch和spi总线发生冲突
-      if (!touch_updated){touch.update(); touch_updated=true;}
-
-      // read the state of the pushbutton value:
-      buttonState1 = digitalRead(buttonPin1);
-      buttonState2 = digitalRead(buttonPin2);
+      // if (!touch_lock){touch.update(); touch_lock=true;}
 
       if (!freeze){ // 如果画面被暂停会跳过这个热成像图的刷新
          // 只有画面更新才会绘制一张热成像图
+         dt = millis();
          while(lock && power_on){
             // 阻塞画面
             vTaskDelay(1);
@@ -541,34 +526,37 @@ void task_screen_draw(void * ptr){
             // mlx90640To_buffer[i] = mlx90640To[i];
             mlx90640To_buffer[i] = (int)(180.0 * (mlx90640To[i] - T_min) / (T_max - T_min));
          }  // 拷贝温度信息
-
          // memcpy(mlx90640To_buffer, mlx90640To, 768 * sizeof(float));
-         draw_heat_image();
-         
-      }
-
+         touch_lock = true;
+         // draw_heat_image();
+         draw_heat_image_dma();
+         touch_lock = false;
+         dt = millis() - dt;
+      }else{dt = 0;}
+      
       tft.setRotation(SCREEN_ROTATION);
       if (test_points[0][0]==0 && test_points[0][1]==0 ){}else{show_local_temp(test_points[0][0], test_points[0][1]);}
       // if (show_local_temp_flag==true) {show_local_temp(test_points[0][0], test_points[0][1]);}
-      if (clear_local_temp==true) {draw_heat_image(false); clear_local_temp=false;}
+      if (clear_local_temp==true) {draw_heat_image_dma(); clear_local_temp=false;}
       // tft.endWrite();
 
       tft.setRotation(SCREEN_ROTATION);
       tft.setTextColor(TFT_WHITE, TFT_BLACK); 
-      tft.setCursor(40, 220);
+      tft.setCursor(25, 220);
       tft.printf("max: %.2f  ", T_max);
-      tft.setCursor(40, 230);
+      tft.setCursor(25, 230);
       tft.printf("min: %.2f  ", T_min);
       
-      tft.setCursor(120, 220);
+      tft.setCursor(105, 220);
       tft.printf("avg: %.2f  ", T_avg);
-      tft.setCursor(120, 230);
+      tft.setCursor(105, 230);
       tft.printf("bat: %.2f v ", bat_v);
       
-      tft.setCursor(190, 220);
-      tft.printf("  brightness");
-      tft.setCursor(190, 230);
-      tft.printf("       %d  ", brightness);
+      tft.setCursor(180, 220);
+      tft.printf("bright: %d  ", brightness);
+      tft.setCursor(180, 230);
+      tft.printf("time: %d ", dt);
+      tft.printf(" ms     ");
 
       vTaskDelay(10);
    }
@@ -626,6 +614,7 @@ void setup(void)
    xTaskCreate(task_bat, "BAT_MANAGER", 1024 * 2, NULL, 3, NULL);
    tft.init();
    tft.setSwapBytes(true);
+   tft.initDMA();
    xTaskCreatePinnedToCore(task_screen_draw, "SCREEN", 1024 * 15, NULL, 2, NULL, 0);
    xTaskCreate(task_smooth_on, "SMOOTH_ON", 1024, NULL, 2, NULL);
    xTaskCreatePinnedToCore(task_button,    "BUTTON", 1024 * 8, NULL, 3, NULL, 1);
