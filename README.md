@@ -5,6 +5,10 @@
 ![21e1ddb4cc45c4b243619daac1f293d](https://github.com/user-attachments/assets/ba77d6f9-5e42-47ff-bc6c-39a7e28b3053)
 
 探头型号：MLX90640 分辨率 24 * 32
+## 特性：
+- 卡尔曼滤波
+- 双线性插值
+- 双缓冲DMA屏幕刷新
 
 ## 用法：
 - 右上角 按钮 静止画面。
