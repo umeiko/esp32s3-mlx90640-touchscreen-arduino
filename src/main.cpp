@@ -227,8 +227,8 @@ uint16_t* dmaBufferPtr = dmaBuffer1;
 bool dmaBufferSel = 0;
 // 在屏幕上绘制热力图
 void draw_heat_image_dma(bool re_mapcolor=true){  
-   int value;
-   int now_y = 0;
+   static int value;
+   static int now_y = 0;
    tft.setRotation(SCREEN_ROTATION);
    for(int y=0; y<24 * _SCALE; y++){ 
       for(int x=0; x<32 * _SCALE; x++){
@@ -240,11 +240,20 @@ void draw_heat_image_dma(bool re_mapcolor=true){
       if(now_y==lines){
          if (dmaBufferSel) dmaBufferPtr = dmaBuffer2;
          else dmaBufferPtr = dmaBuffer1;
+         dmaBufferSel = !dmaBufferSel; // Toggle buffer selection
          tft.startWrite();
-         tft.pushImageDMA(0, y, 32*_SCALE, lines, lineBuffer, dmaBufferPtr);
+         tft.pushImageDMA(0, y-now_y, 32*_SCALE, lines, lineBuffer, dmaBufferPtr);
          tft.endWrite();
          now_y = 0;
       }
+   }if(now_y!=0){
+      if (dmaBufferSel) dmaBufferPtr = dmaBuffer2;
+      else dmaBufferPtr = dmaBuffer1;
+      dmaBufferSel = !dmaBufferSel; // Toggle buffer selection
+      tft.startWrite();
+      tft.pushImageDMA(0, 24*_SCALE-1-now_y, 32*_SCALE, now_y, lineBuffer, dmaBufferPtr);
+      tft.endWrite();
+      now_y = 0;
    }
 }
 
@@ -556,7 +565,7 @@ void task_screen_draw(void * ptr){
       tft.printf("bright: %d  ", brightness);
       tft.setCursor(180, 230);
       tft.printf("time: %d ", dt);
-      tft.printf(" ms     ");
+      tft.printf("ms     ");
 
       vTaskDelay(10);
    }
@@ -617,7 +626,7 @@ void setup(void)
    tft.initDMA();
    xTaskCreatePinnedToCore(task_screen_draw, "SCREEN", 1024 * 15, NULL, 2, NULL, 0);
    xTaskCreate(task_smooth_on, "SMOOTH_ON", 1024, NULL, 2, NULL);
-   xTaskCreatePinnedToCore(task_button,    "BUTTON", 1024 * 8, NULL, 3, NULL, 1);
+   xTaskCreate(task_button,    "BUTTON", 1024 * 8, NULL, 3, NULL);
    xTaskCreatePinnedToCore(task_touchpad,  "TOUCHPAD", 1024 * 3, NULL, 3, NULL, 1);
    #if defined(SEND_TO_SERIAL)
    xTaskCreate(task_serial_communicate, "SERIAL_COMM", 1024 * 10, NULL, 5, NULL);
