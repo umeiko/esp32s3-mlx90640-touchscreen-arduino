@@ -1,4 +1,5 @@
 ***新版本的启凡-找羊科创设计的热成像仪更换了屏幕的gpio号，根据你手上板子的原理图手动修改gpio号***
+
 具体可以访问[这个FORK](https://github.com/azwhikaru/esp32s3-mlx90640-touchscreen-arduino?tab=readme-ov-file)
     
 - `Setup203_ST7789.h` 中的相应gpio需要修改
